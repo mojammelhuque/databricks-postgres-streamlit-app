@@ -1,0 +1,37 @@
+# Databricks App Configuration for Oil & Gas Streamlit Dashboard
+# =================================================================
+# This file configures the app for deployment on Databricks Apps.
+# The lakebase configuration auto-injects Postgres connection env vars.
+
+# The app entry point
+entrypoint: app/app.py
+
+# Python version
+python_version: "3.11"
+
+# Lakebase Postgres connection
+# The app.yaml uses the 'lakebase' feature to auto-connect to the
+# databricks-postgres-streamlit project's production branch.
+lakebase:
+  postgres:
+    # Project ID of your Lakebase Postgres project
+    project: databricks-postgres-streamlit
+    # Branch name (use 'production' for the default branch)
+    branch: production
+    # Database name
+    database: databricks_postgres
+    # The connection env vars injected:
+    #   DATABRICKS_LAKEBASE_PG_HOST
+    #   DATABRICKS_LAKEBASE_PG_PORT
+    #   DATABRICKS_LAKEBASE_PG_USER
+    #   DATABRICKS_LAKEBASE_PG_PASSWORD
+    #   DATABRICKS_LAKEBASE_PG_DATABASE
+
+# Environment variables (optional, for app configuration)
+env:
+  - name: APP_TITLE
+    value: "Oil & Gas Well Production Dashboard"
+  - name: TABLE_NAME
+    value: "synced_well_production"
+  - name: SCHEMA_NAME
+    value: "public"
