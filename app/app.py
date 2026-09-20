@@ -214,7 +214,8 @@ def _connect_via_databricks_sdk():
     lakebase_db = _get_secret("LAKEBASE_PG_DB") or "databricks_postgres"
     lakebase_port = _get_secret("LAKEBASE_PG_PORT") or "5432"
     project_name = _get_secret("LAKEBASE_PROJECT") or "databricks-postgres-streamlit"
-    endpoint_name = f"projects/{project_name}/endpoints/primary"
+    branch_name = _get_secret("LAKEBASE_BRANCH") or "production"
+    endpoint_name = f"projects/{project_name}/branches/{branch_name}/endpoints/primary"
 
     try:
         w = WorkspaceClient(host=databricks_host, token=databricks_token)
