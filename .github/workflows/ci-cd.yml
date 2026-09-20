@@ -137,35 +137,54 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Databricks CLI
-        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-
-      - name: Configure Databricks CLI
         run: |
-          if [ -z "${{ secrets.DATABRICKS_HOST }}" ] || [ -z "${{ secrets.DATABRICKS_TOKEN }}" ]; then
-            echo "DATABRICKS_HOST or DATABRICKS_TOKEN secrets not set."
-            echo "To enable CD deployment, add these repository secrets:"
-            echo "  DATABRICKS_HOST     - Your Databricks workspace URL"
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+          databricks --version || { echo "Databricks CLI installation failed"; exit 1; }
+
+      - name: Check required secrets
+        run: |
+          if [ -z "${{ secrets.DATABRICKS_HOST }}" ] || [ -z "${{ secrets.DATABRICKS_TOKEN }}" ] || [ -z "${{ secrets.DATABRICKS_APP_NAME }}" ]; then
+            echo "⚠️ Required GitHub secrets are not set. Skipping CD deployment."
+            echo "To enable deployment, add these repository secrets (Settings → Secrets and variables → Actions):"
+            echo "  DATABRICKS_HOST     - Your Databricks workspace URL (e.g., https://dbc-xxx.cloud.databricks.com)"
             echo "  DATABRICKS_TOKEN    - Your Databricks personal access token"
-            echo "  DATABRICKS_APP_NAME - Your Databricks App name"
-            echo "Skipping deployment for now. CI checks passed successfully."
+            echo "  DATABRICKS_APP_NAME - Your Databricks App name (e.g., oil-gas-well-ops)"
+            echo ""
+            echo "✅ CI checks passed. CD deployment skipped (no secrets configured)."
             exit 0
           fi
-          export DATABRICKS_HOST=${{ secrets.DATABRICKS_HOST }}
-          export DATABRICKS_TOKEN=${{ secrets.DATABRICKS_TOKEN }}
+          echo "✅ All required secrets are set."
+
+      - name: Sync app files to Databricks workspace
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          APP_NAME=${{ secrets.DATABRICKS_APP_NAME }}
+          WORKSPACE_PATH="/Workspace/Shared/apps/$APP_NAME"
+          echo "Syncing app files to: $WORKSPACE_PATH"
+          databricks sync ./app "$WORKSPACE_PATH" || { echo "Sync failed"; exit 1; }
+          echo "Files synced successfully."
+          echo "WORKSPACE_PATH=$WORKSPACE_PATH" >> $GITHUB_ENV
 
       - name: Deploy Databricks App
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          export DATABRICKS_HOST=${{ secrets.DATABRICKS_HOST }}
-          export DATABRICKS_TOKEN=${{ secrets.DATABRICKS_TOKEN }}
           APP_NAME=${{ secrets.DATABRICKS_APP_NAME }}
+          WORKSPACE_PATH="${WORKSPACE_PATH}"
           echo "Deploying app: $APP_NAME"
           echo "Workspace: $DATABRICKS_HOST"
           if databricks apps get "$APP_NAME" 2>/dev/null; then
             echo "App exists, deploying update..."
-            databricks apps deploy "$APP_NAME" --source-path ./app
+            databricks apps deploy "$APP_NAME" --source-code-path "$WORKSPACE_PATH"
           else
             echo "App does not exist. Creating new app..."
-            databricks apps create "$APP_NAME" --source-path ./app
+            databricks apps create "$APP_NAME"
+            echo "Waiting for app creation..."
+            sleep 10
+            databricks apps deploy "$APP_NAME" --source-code-path "$WORKSPACE_PATH"
           fi
           echo "Deployment complete!"
           echo "App URL: $DATABRICKS_HOST/apps/$APP_NAME"
