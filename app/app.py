@@ -232,7 +232,6 @@ def _connect_via_databricks_sdk():
             return None
 
         st.session_state["conn_info"] = f"Connected to {lakebase_host}/{lakebase_db} (SDK token)"
-        # Retry connection — Lakebase endpoint may be waking from scale-to-zero (5-10 sec cold start)
         last_err = None
         for attempt in range(3):
             try:
@@ -250,7 +249,7 @@ def _connect_via_databricks_sdk():
                 last_err = e
                 if attempt < 2:
                     import time as _time
-                    _time.sleep(5 * (attempt + 1))  # 5s, then 10s
+                    _time.sleep(5 * (attempt + 1))
         raise last_err
     except Exception as e:
         st.error(f"Databricks SDK connection failed: {str(e)[:200]}")
@@ -272,7 +271,6 @@ def execute_query(conn, query, params=None, fetch=True):
         cur.close()
         return None, None
     except Exception as e:
-        # Only rollback if the connection is still open (not dead)
         if cur:
             try:
                 cur.close()
@@ -395,19 +393,17 @@ def main():
         conn = get_connection()
         if conn is None:
             st.stop()
-        # Health check: verify the connection is alive
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
             break
         except Exception:
-            # Connection is stale (endpoint scaled to zero) — clear cache and retry
             get_connection.clear()
             conn = None
             if _attempt == 0:
                 import time as _time
-                _time.sleep(3)  # Allow endpoint to wake up
+                _time.sleep(3)
             else:
                 st.error("Could not connect to Lakebase Postgres after retry. The endpoint may be waking up — please refresh the page in a few seconds.")
                 st.stop()
