@@ -7,11 +7,12 @@
 ## Table of Contents
 
 1. [Connection Issues](#connection-issues)
-2. [Sync Issues](#sync-issues)
-3. [Streamlit App Issues](#streamlit-app-issues)
-4. [Databricks App Deployment](#databricks-app-deployment)
-5. [Git & GitHub Issues](#git--github-issues)
-6. [CI/CD Pipeline Issues](#cicd-pipeline-issues)
+2. [Streamlit Cloud Deployment Issues](#streamlit-cloud-deployment-issues)
+3. [Sync Issues](#sync-issues)
+4. [Streamlit App Issues](#streamlit-app-issues)
+5. [Databricks App Deployment](#databricks-app-deployment)
+6. [Git & GitHub Issues](#git--github-issues)
+7. [CI/CD Pipeline Issues](#cicd-pipeline-issues)
 
 ---
 
@@ -86,6 +87,172 @@ import socket
 ip = socket.gethostbyname(host)
 conn = psycopg.connect(host=host, hostaddr=ip, sslmode="require", ...)
 ```
+
+---
+
+## Streamlit Cloud Deployment Issues
+
+### Problem: "Endpoint name expects 'projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}' format"
+
+**Cause**: Missing `branches/{branch}` segment in the SDK endpoint path.
+
+**Symptom**: App shows "Databricks SDK connection failed: Endpoint name expects ..." in the connection status box.
+
+**Solution**: The app now correctly includes the branch in the endpoint path. Ensure you have `LAKEBASE_BRANCH` in your Streamlit secrets:
+
+```toml
+LAKEBASE_BRANCH = "production"
+```
+
+If the secret is missing, the app defaults to `"production"`.
+
+**Root Cause**: The Databricks SDK requires the full hierarchical path: `projects/{project}/branches/{branch}/endpoints/{endpoint}`. Earlier versions omitted the branch segment.
+
+**Fixed in**: Commit `82ed057` (September 20, 2026)
+
+---
+
+### Problem: "psycopg.errors.UndefinedTable: relation 'public.synced_well_production' does not exist"
+
+**Cause**: App looked for table in `public` schema but Reverse ETL created it in `oil_gas_ops` schema.
+
+**Symptom**: Dashboard loads but shows "No data found" or an UndefinedTable error.
+
+**Solution**: The app now uses `SCHEMA_NAME = "oil_gas_ops"` to match the actual Postgres schema.
+
+**How to verify your schema**:
+
+```sql
+SELECT table_schema, table_name 
+FROM information_schema.tables 
+WHERE table_name = 'synced_well_production';
+```
+
+**Root Cause**: Reverse ETL creates the Postgres table in a schema matching the Unity Catalog schema name (e.g., `workspace.oil_gas_ops.synced_well_production` → Postgres `oil_gas_ops.synced_well_production`), NOT in the `public` schema.
+
+**Fixed in**: Commit `95ce17b` (September 20, 2026)
+
+---
+
+### Problem: "current transaction is aborted, commands ignored until end of transaction block"
+
+**Cause**: A database error (e.g., duplicate key, constraint violation) aborted the transaction, and subsequent commands were ignored until rollback.
+
+**Symptom**: After attempting to add a well (or any write operation), all subsequent operations show this error message.
+
+**Solution**: The app now automatically rolls back failed transactions. The `execute_query()` function includes:
+
+```python
+try:
+    cur.execute(query, params)
+    conn.commit()
+except Exception as e:
+    conn.rollback()
+    raise Exception(f"Database error: {str(e)}")
+```
+
+**Root Cause**: PostgreSQL aborts transactions on errors. Without explicit rollback, the connection stays in an aborted state and rejects all subsequent commands.
+
+**Fixed in**: Commit `5e00d62` (September 20, 2026)
+
+**Common triggers**:
+* Duplicate primary key (e.g., trying to insert well_id=26 when it already exists)
+* NULL values in NOT NULL columns
+* Data type mismatches
+* Check constraint violations
+
+---
+
+### Problem: App shows secrets error or KeyError
+
+**Cause**: Using `st.secrets["KEY"]` instead of `st.secrets.get("KEY")` causes KeyError when a secret is missing.
+
+**Symptom**: App crashes with `KeyError: 'DATABRICKS_HOST'` or similar.
+
+**Solution**: App now uses `st.secrets.get(key)` with fallback to environment variables:
+
+```python
+def _get_secret(key, fallback_env=None):
+    try:
+        val = st.secrets.get(key)
+        if val:
+            return val
+    except Exception:
+        pass
+    return os.environ.get(fallback_env or key, "")
+```
+
+**Root Cause**: `st.secrets[key]` raises KeyError on missing keys; `.get(key)` returns None safely.
+
+**Fixed in**: Commit `f7f6f28` (September 20, 2026)
+
+---
+
+### Problem: App shows "No data found" but UC table has data
+
+**Cause**: Reverse ETL sync hasn't run yet, or sync is in triggered mode and needs manual execution.
+
+**Solution**:
+
+1. Check if the UC synced table has data:
+   ```sql
+   SELECT COUNT(*) FROM workspace.oil_gas_ops.synced_well_production;
+   ```
+
+2. Check if the Postgres table has data (using Lakebase SQL):
+   ```sql
+   SELECT COUNT(*) FROM oil_gas_ops.synced_well_production;
+   ```
+
+3. If UC synced table is empty, trigger a sync update from Databricks:
+   - Go to your synced table in Catalog Explorer
+   - Click "Update" to manually trigger the sync
+
+4. Wait 10-30 seconds for the sync pipeline to complete
+
+**Note**: Triggered syncs do NOT run automatically — they only run when you click "Update" or via API.
+
+---
+
+### Problem: PAT expired (after 90 days)
+
+**Cause**: Databricks Personal Access Tokens have a maximum 90-day lifetime.
+
+**Symptom**: App shows authentication errors like "Invalid token" or "401 Unauthorized".
+
+**Solution**:
+
+1. Generate a new PAT:
+   - Go to Databricks Settings → Developer → Access Tokens
+   - Click "Generate new token"
+   - Set lifetime: 90 days (maximum)
+   - Copy the new token
+
+2. Update Streamlit Cloud secrets:
+   - Go to your app → Settings → Secrets
+   - Replace `DATABRICKS_TOKEN` with the new token
+   - Click Save
+
+3. App will auto-restart with the new token
+
+**Prevention**: Set a calendar reminder 85 days after generating the PAT to regenerate before expiration.
+
+---
+
+### Problem: Cold start takes 15-30 seconds
+
+**Cause**: Streamlit Cloud free tier apps sleep after inactivity. The Lakebase endpoint also scales to zero.
+
+**Symptom**: First page load after inactivity shows a "Your app is waking up" message.
+
+**Solution**: This is normal behavior for the free tier. No action needed.
+
+**Why it happens**:
+1. Streamlit app wakes up (~5-10 seconds)
+2. Lakebase Postgres endpoint wakes up (~5-10 seconds)
+3. App establishes connection and queries data (~1-2 seconds)
+
+**Mitigation**: Consider upgrading to Streamlit Cloud paid tier if cold starts are unacceptable, or use Databricks Apps (always-on, no cold starts).
 
 ---
 

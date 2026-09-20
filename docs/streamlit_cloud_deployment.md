@@ -248,4 +248,143 @@ print(f"Host: {endpoint.host}")
 | Lakebase Host | ep-patient-term-d801116u.database.us-east-2.cloud.databricks.com |
 | Lakebase Project | databricks-postgres-streamlit |
 | Database | databricks_postgres |
-| Table | public.synced_well_production |
+| Table | oil_gas_ops.synced_well_production |
+| Branch | production |
+
+---
+
+## ✅ Deployment Success Log
+
+### Successfully Deployed: September 20, 2026
+
+**Final Working Configuration:**
+
+```toml
+DATABRICKS_HOST = "https://dbc-050f2fd4-a450.cloud.databricks.com"
+DATABRICKS_TOKEN = "dapiYOUR_TOKEN_HERE"
+LAKEBASE_PG_HOST = "ep-patient-term-d801116u.database.us-east-2.cloud.databricks.com"
+LAKEBASE_PG_USER = "mojammel.huque@gmail.com"
+LAKEBASE_PG_DB = "databricks_postgres"
+LAKEBASE_PG_PORT = "5432"
+LAKEBASE_PROJECT = "databricks-postgres-streamlit"
+LAKEBASE_BRANCH = "production"
+```
+
+**Key Fixes Applied:**
+
+1. **Endpoint Path Format** (Critical)
+   - **Issue**: SDK endpoint name must use format `projects/{project}/branches/{branch}/endpoints/{endpoint}`
+   - **Fix**: Added `LAKEBASE_BRANCH` parameter and updated endpoint path construction
+   - **Code Change**: `endpoint_name = f"projects/{project_name}/branches/{branch_name}/endpoints/primary"`
+   - **Error Message**: "Endpoint name expects 'projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}' format"
+
+2. **Schema Mismatch** (Critical)
+   - **Issue**: App looked for `public.synced_well_production` but table exists in `oil_gas_ops` schema
+   - **Fix**: Changed `SCHEMA_NAME = "public"` to `SCHEMA_NAME = "oil_gas_ops"`
+   - **Root Cause**: Reverse ETL syncs to schema matching the UC schema, not to `public`
+   - **Error Message**: "psycopg.errors.UndefinedTable: relation 'public.synced_well_production' does not exist"
+
+3. **Transaction Error Handling** (Important)
+   - **Issue**: Failed operations left transaction in aborted state, blocking all subsequent queries
+   - **Fix**: Added `try-except` with `conn.rollback()` to `execute_query()` function
+   - **Impact**: Insert failures (duplicate keys, constraint violations) now properly reset the connection
+   - **Error Message**: "current transaction is aborted, commands ignored until end of transaction block"
+
+**Deployment Timeline:**
+
+* Initial setup: Connection path implemented with SDK token refresh
+* Fix 1 (endpoint path): Added branch parameter to endpoint name
+* Fix 2 (schema): Corrected schema from `public` to `oil_gas_ops`
+* Fix 3 (transactions): Added rollback on database errors
+* Status: ✅ **Fully operational** - Dashboard loads 25 wells, all CRUD operations working
+
+**Performance:**
+
+* Cold start: ~15-20 seconds (app wake + endpoint wake)
+* Warm requests: ~1-2 seconds
+* Token refresh: Every 45 minutes (cached, transparent to user)
+* Data freshness: Reverse ETL syncs on trigger from UC table
+
+**Verified Features:**
+
+* ✅ Dashboard: KPIs, charts, well status distribution, basin maps
+* ✅ Well List: Sortable, filterable table
+* ✅ Add New Well: Form with validation and error handling
+* ✅ Edit Well: Update well status and production data
+* ✅ Delete Well: Remove wells with confirmation
+* ✅ Analytics: Production trends, basin comparisons, operator rankings
+
+---
+
+## Common Issues & Solutions
+
+### Issue 1: "Endpoint name expects ... format"
+
+**Symptom**: App shows "Databricks SDK connection failed: Endpoint name expects 'projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}' format"
+
+**Cause**: Missing `branches/{branch}` segment in endpoint path
+
+**Solution**: Add `LAKEBASE_BRANCH` to Streamlit secrets:
+
+```toml
+LAKEBASE_BRANCH = "production"
+```
+
+### Issue 2: "relation does not exist" or "UndefinedTable"
+
+**Symptom**: App shows "psycopg.errors.UndefinedTable: relation 'public.synced_well_production' does not exist"
+
+**Cause**: App is looking in the wrong schema. Reverse ETL creates the table in a schema matching the UC schema name (e.g., `oil_gas_ops`), not in `public`.
+
+**Solution**: Check which schema your table is in:
+
+```sql
+SELECT table_schema, table_name 
+FROM information_schema.tables 
+WHERE table_name = 'synced_well_production';
+```
+
+If it's in `oil_gas_ops`, the app code already handles this correctly (as of latest version).
+
+### Issue 3: "transaction is aborted"
+
+**Symptom**: After an insert/update/delete error, all subsequent operations show "current transaction is aborted, commands ignored until end of transaction block"
+
+**Cause**: PostgreSQL aborts transactions on errors and requires explicit rollback
+
+**Solution**: Latest app version includes automatic rollback. If you see this error:
+
+1. Close and reopen the app (forces new connection)
+2. Or update to the latest version (transaction error handling added)
+
+### Issue 4: Empty Dashboard / No Data
+
+**Symptom**: Dashboard loads but shows "No data found. Make sure the Reverse ETL sync has completed."
+
+**Cause**: Reverse ETL hasn't synced data from UC to Postgres yet
+
+**Solution**: 
+
+1. Check if source UC table has data:
+   ```sql
+   SELECT COUNT(*) FROM workspace.oil_gas_ops.well_production;
+   ```
+
+2. Check if synced table has data:
+   ```sql
+   SELECT COUNT(*) FROM workspace.oil_gas_ops.synced_well_production;
+   ```
+
+3. Trigger a manual sync from Databricks (if in triggered mode)
+
+### Issue 5: PAT Expired
+
+**Symptom**: App shows authentication errors after 90 days
+
+**Cause**: Databricks PATs have a maximum 90-day lifetime
+
+**Solution**:
+
+1. Generate a new PAT (see "Generating a Databricks PAT" section above)
+2. Update `DATABRICKS_TOKEN` in Streamlit Cloud secrets
+3. App will auto-restart with new token
