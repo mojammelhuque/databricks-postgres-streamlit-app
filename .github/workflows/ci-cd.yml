@@ -72,16 +72,45 @@ jobs:
 
       - name: Validate app.yaml structure
         run: |
-          python -c "
+          python << 'PYEOF'
           import yaml
-          with open('app/app.yaml', 'r') as f:
-              config = yaml.safe_load(f)
-          assert 'entrypoint' in config, 'Missing entrypoint in app.yaml'
-          assert 'python_version' in config, 'Missing python_version in app.yaml'
-          print('app.yaml is valid')
-          print(f'Entrypoint: {config["entrypoint"]}')
-          print(f'Python: {config["python_version"]}')
-          "
+          import sys
+          import os
+          
+          yaml_path = 'app/app.yaml'
+          print(f'Validating {yaml_path}...')
+          print(f'Current directory: {os.getcwd()}')
+          print(f'File exists: {os.path.exists(yaml_path)}')
+          
+          try:
+              with open(yaml_path, 'r') as f:
+                  config = yaml.safe_load(f)
+              
+              print(f'YAML parsed successfully')
+              print(f'Config keys: {list(config.keys())}')
+              
+              if 'entrypoint' not in config:
+                  print('ERROR: Missing entrypoint in app.yaml', file=sys.stderr)
+                  sys.exit(1)
+              
+              if 'python_version' not in config:
+                  print('ERROR: Missing python_version in app.yaml', file=sys.stderr)
+                  sys.exit(1)
+              
+              print('✅ app.yaml is valid')
+              print(f'   Entrypoint: {config["entrypoint"]}')
+              print(f'   Python: {config["python_version"]}')
+          
+          except FileNotFoundError:
+              print(f'ERROR: {yaml_path} not found', file=sys.stderr)
+              sys.exit(1)
+          except yaml.YAMLError as e:
+              print(f'ERROR: YAML parsing failed: {e}', file=sys.stderr)
+              sys.exit(1)
+          except Exception as e:
+              print(f'ERROR: Unexpected error: {e}', file=sys.stderr)
+              sys.exit(1)
+          PYEOF
 
       - name: Check for hardcoded secrets
         run: |
