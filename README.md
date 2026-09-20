@@ -12,10 +12,11 @@
 4. [Prerequisites](#prerequisites)
 5. [Setup Guide](#setup-guide)
 6. [Running the Streamlit App](#running-the-streamlit-app)
-7. [Databricks App Deployment](#databricks-app-deployment)
-8. [Local Development](#local-development)
-9. [Data Dictionary](#data-dictionary)
-10. [Troubleshooting](#troubleshooting)
+7. [CI/CD Pipeline](#cicd-pipeline)
+8. [Data Dictionary](#data-dictionary)
+9. [Troubleshooting](#troubleshooting)
+10. [Security](#security)
+11. [Documentation](#documentation)
 
 ---
 
@@ -310,22 +311,93 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues and sol
 
 ---
 
+## Security
+
+See [docs/security.md](docs/security.md) for the full security architecture, credential management, and compliance documentation.
+
+Key highlights:
+* No secrets in version control (verified by CI scan)
+* OAuth tokens auto-rotate every 60 minutes
+* SSL/TLS encryption on all connections
+* VPC-isolated database endpoint
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [architecture.md](docs/architecture.md) | System architecture, data flow, and security model |
+| [data_dictionary.md](docs/data_dictionary.md) | Field-by-field data dictionary |
+| [deployment_guide.md](docs/deployment_guide.md) | Step-by-step deployment for Databricks Apps, local, and RStudio |
+| [api_reference.md](docs/api_reference.md) | Function reference for app.py |
+| [security.md](docs/security.md) | Security architecture, credentials, and compliance |
+| [branching_strategy.md](docs/branching_strategy.md) | Git branching, CI/CD pipeline, and developer workflow |
+| [troubleshooting.md](docs/troubleshooting.md) | Common issues, error messages, and solutions |
+
+---
+
+## CI/CD Pipeline
+
+This project uses GitHub Actions for continuous integration and deployment.
+
+### Pipeline Overview
+
+```
+Feature Branch  ->  Dev Branch  ->  Main Branch  ->  Production
+   (develop)        (testing)      (review)        (deploy)
+```
+
+### CI Stage (on push to `dev` or PR to `main`)
+
+1. **Lint with flake8** - Syntax and code quality checks
+2. **Validate imports** - Verify required Python modules are imported
+3. **Validate app.yaml** - Check YAML structure and required keys
+4. **Secret scan** - Detect hardcoded passwords/tokens/secrets
+
+### CD Stage (on PR merge to `main`)
+
+1. Install Databricks CLI
+2. Configure with GitHub Secrets
+3. Deploy app to Databricks Apps
+4. Generate deployment summary
+
+### Required GitHub Secrets
+
+| Secret | Description |
+|-------|-------------|
+| `DATABRICKS_HOST` | Your Databricks workspace URL |
+| `DATABRICKS_TOKEN` | Databricks personal access token |
+| `DATABRICKS_APP_NAME` | Name of the Databricks App |
+
+See [docs/branching_strategy.md](docs/branching_strategy.md) for the full branching workflow.
+
+---
+
 ## Repository Structure
 
 ```
 databricks-postgres-streamlit-apps/
-├── README.md                    # This file - project overview and setup guide
-├── app/                         # Streamlit application
-│   ├── app.py                   # Main Streamlit app (read/write to Postgres)
-│   ├── app.yaml                 # Databricks App configuration
-│   └── requirements.txt         # Python dependencies
-├── notebooks/                   # Setup and configuration
-│   └── setup_and_sync.py        # Notebook to create project, table, and sync
-├── docs/                        # Documentation
-│   ├── data_dictionary.md       # Field descriptions for Oil & Gas data
-│   ├── architecture.md          # Detailed architecture and design
-│   └── troubleshooting.md       # Common issues and solutions
-└── .gitignore                   # Git ignore rules
+├── README.md                        # This file - project overview and setup guide
+├── .gitignore                        # Git ignore rules (.env, etc.)
+├── app/                              # Streamlit application
+│   ├── app.py                        # Main Streamlit app (read/write to Postgres)
+│   ├── app.yaml                      # Databricks App configuration
+│   └── requirements.txt              # Python dependencies
+├── notebooks/                        # Setup and configuration
+│   └── setup_and_sync.py             # Notebook to create project, table, and sync
+├── .github/                          # CI/CD configuration
+│   ├── workflows/
+│   │   └── ci-cd.yml                 # GitHub Actions CI/CD pipeline
+│   └── pull_request_template.md      # PR template
+└── docs/                             # Documentation
+    ├── architecture.md               # System architecture and data flow
+    ├── data_dictionary.md            # Field descriptions for Oil & Gas data
+    ├── deployment_guide.md            # Step-by-step deployment instructions
+    ├── api_reference.md              # Function reference for app.py
+    ├── security.md                    # Security architecture and best practices
+    ├── branching_strategy.md          # Git branching and CI/CD workflow
+    └── troubleshooting.md            # Common issues and solutions
 ```
 
 ---

@@ -231,3 +231,106 @@ export LAKEBASE_PG_DB=databricks_postgres
 | Lakebase Database | databricks_postgres | Database |
 | Sync Pipeline | a41bf65e-3ca8-4522-aebf-e196234fd973 | SDP Pipeline |
 | GitHub Repo | databricks-postgres-streamlit-app | Git Repository |
+
+---
+
+## CI/CD Pipeline Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     CI/CD PIPELINE ARCHITECTURE                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌────────────┐     ┌────────────┐     ┌────────────┐              │
+│  │  Feature   │ PR  │    Dev     │ PR  │   Main     │              │
+│  │  Branch    │──→ │  (Testing) │──→ │(Production)│              │
+│  │ feature/*  │     │            │     │            │              │
+│  └────────────┘     └────────────┘     └────────────┘              │
+│                            │                    │                  │
+│                     CI Pipeline            CD Pipeline              │
+│                     (on push/PR)          (on merge)                │
+│                            │                    │                  │
+│                     ┌──────┴──────┐     ┌──────┴──────┐           │
+│                     │ 1. Lint     │     │ 1. Checkout │           │
+│                     │ 2. Imports  │     │ 2. Python   │           │
+│                     │ 3. YAML val │     │ 3. CLI setup│           │
+│                     │ 4. Secret   │     │ 4. Configure│           │
+│                     │    scan    │     │ 5. Deploy  │           │
+│                     └─────────────┘     │ 6. Summary │           │
+│                                          └────────────┘           │
+│                                                                     │
+│  GitHub Secrets: DATABRICKS_HOST, DATABRICKS_TOKEN,               │
+│                  DATABRICKS_APP_NAME                              │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### CI Pipeline Stages
+
+| Stage | Tool | Purpose | Blocking |
+|-------|------|---------|----------|
+| Lint | flake8 | Syntax errors, code quality | Yes |
+| Import Validation | ast module | Required modules imported | Yes |
+| YAML Validation | PyYAML | app.yaml structure and keys | Yes |
+| Secret Scan | grep (POSIX) | Hardcoded credentials | Yes |
+
+### CD Pipeline Stages
+
+| Stage | Tool | Purpose |
+|-------|------|---------|
+| Checkout | actions/checkout@v4 | Get source code |
+| Python Setup | actions/setup-python@v5 | Python 3.11 |
+| CLI Install | curl + install.sh | Databricks CLI |
+| Configure | GitHub Secrets | DATABRICKS_HOST/TOKEN |
+| Deploy | databricks apps deploy | Deploy to Databricks Apps |
+| Summary | $GITHUB_STEP_SUMMARY | Deployment record |
+
+---
+
+## Deployment Architecture
+
+### Databricks Apps (Production)
+
+```
+GitHub Actions CI/CD
+        │
+        ▼
+databricks apps deploy --source-path ./app
+        │
+        ▼
+┌───────────────────────────────────────────────┐
+│  Databricks App (oil-gas-streamlit-app)        │
+│  ┌───────────────────────────────────────────┐│
+│  │  Streamlit Runtime                        ││
+│  │  • Python 3.11                            ││
+│  │  • Auto-scaled compute                    ││
+│  │  • Auto-injected Lakebase credentials     ││
+│  └──────────────────┬────────────────────────┘│
+│                     │                          │
+│  ┌──────────────────▼────────────────────────┐│
+│  │  Lakebase Postgres Connection              ││
+│  │  • OAuth token (auto-rotated hourly)      ││
+│  │  • SSL/TLS encrypted                       ││
+│  │  • Connection cached (45 min TTL)          ││
+│  └──────────────────┬────────────────────────┘│
+└─────────────────────┼─────────────────────────┘
+                      │
+                      ▼
+              Lakebase Postgres
+              (production branch)
+```
+
+### Local Development
+
+```
+Developer Machine
+├── .env file (git-ignored)
+│   ├── LAKEBASE_PG_HOST
+│   ├── LAKEBASE_PG_USER
+│   └── LAKEBASE_PG_PASSWORD (manual OAuth token)
+│
+├── streamlit run app.py
+│   └── python-dotenv loads .env
+│
+└── Direct SSL connection to Lakebase Postgres
+```

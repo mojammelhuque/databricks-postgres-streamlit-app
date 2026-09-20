@@ -11,6 +11,7 @@
 3. [Streamlit App Issues](#streamlit-app-issues)
 4. [Databricks App Deployment](#databricks-app-deployment)
 5. [Git & GitHub Issues](#git--github-issues)
+6. [CI/CD Pipeline Issues](#cicd-pipeline-issues)
 
 ---
 
@@ -222,3 +223,69 @@ If you encounter an issue not listed here:
 1. Check the [Lakebase Postgres documentation](https://docs.databricks.com/aws/en/oltp/)
 2. Review the Databricks SDK logs
 3. Contact the project maintainer
+
+---
+
+## CI/CD Pipeline Issues
+
+### Problem: CI fails on "Validate app.yaml structure"
+
+**Cause**: YAML parsing issue in GitHub Actions environment.
+
+**Solution**:
+1. Verify `app/app.yaml` exists in the repo
+2. Check YAML syntax locally: `python -c "import yaml; yaml.safe_load(open('app/app.yaml'))"`
+3. Ensure no tabs are used (YAML requires spaces)
+4. Check that the heredoc Python block in `ci-cd.yml` is properly indented
+
+---
+
+### Problem: CI fails on "Check for hardcoded secrets"
+
+**Cause**: The secret scanner found a pattern matching `(password|token|secret) = "value"`.
+
+**Solution**:
+1. Review the CI log for the flagged file and line number
+2. Replace hardcoded values with environment variable references:
+   ```python
+   # BAD
+   password = "my-secret-token-12345"
+   
+   # GOOD
+   password = os.environ.get("PASSWORD", "")
+   ```
+3. If it is a false positive (e.g., a variable name), restructure to avoid the pattern
+
+---
+
+### Problem: CD deployment skipped with "secrets not set"
+
+**Cause**: GitHub repository secrets (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_APP_NAME`) are not configured.
+
+**Solution**:
+1. Go to GitHub > Settings > Secrets and variables > Actions
+2. Add the three required secrets
+3. Create GitHub Environments: `dev` and `main` (production)
+4. Re-run the workflow or merge a new PR
+
+---
+
+### Problem: GitHub Actions push fails with "refusing to allow an OAuth App to create or update workflow"
+
+**Cause**: The GitHub token/credential lacks `workflow` scope.
+
+**Solution**:
+1. Update your GitHub Personal Access Token to include the `workflow` scope
+2. In Databricks: Settings > Git > Credentials, update the credential
+3. Or use a different credential that has the `workflow` scope
+
+---
+
+### Problem: `flake8` fails with syntax errors
+
+**Cause**: Python syntax issues in `app/app.py`.
+
+**Solution**:
+1. Run flake8 locally: `flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics`
+2. Fix any syntax errors reported
+3. Push the fix to re-trigger CI
