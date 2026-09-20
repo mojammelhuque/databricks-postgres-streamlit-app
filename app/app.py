@@ -728,10 +728,18 @@ def main():
                        (df['latitude'] != 0) & (df['longitude'] != 0)]
             if not map_df.empty:
                 st.subheader("🗺️ Well Locations Map")
-                fig = px.scatter_mapbox(map_df, lat='latitude', lon='longitude',
-                                       hover_name='well_name', hover_data=['operator', 'basin', 'oil_rate'],
-                                       color='well_status', size='oil_rate',
-                                       zoom=3, mapbox_style='open-street-map')
+                # Plotly 6.0+ replaced scatter_mapbox with scatter_map
+                # Use scatter_map for Plotly 6.0+, fall back to scatter_mapbox for 5.x
+                try:
+                    fig = px.scatter_map(map_df, lat='latitude', lon='longitude',
+                                         hover_name='well_name', hover_data=['operator', 'basin', 'oil_rate'],
+                                         color='well_status', size='oil_rate',
+                                         zoom=3, map_style='open-street-map')
+                except AttributeError:
+                    fig = px.scatter_mapbox(map_df, lat='latitude', lon='longitude',
+                                            hover_name='well_name', hover_data=['operator', 'basin', 'oil_rate'],
+                                            color='well_status', size='oil_rate',
+                                            zoom=3, mapbox_style='open-street-map')
                 st.plotly_chart(fig, use_container_width=True)
 
 

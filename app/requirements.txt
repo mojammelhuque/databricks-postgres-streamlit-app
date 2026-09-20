@@ -3,7 +3,7 @@
 # Core packages
 streamlit>=1.30.0
 pandas>=2.0.0
-plotly>=5.18.0
+plotly>=5.18.0,<7.0.0  # 5.x uses scatter_mapbox, 6.x uses scatter_map — both supported via fallback
 
 # Postgres driver (psycopg3 preferred, psycopg2 as fallback)
 psycopg[binary,pool]>=3.1.0
