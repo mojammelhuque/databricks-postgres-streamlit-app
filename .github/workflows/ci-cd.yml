@@ -114,11 +114,11 @@ jobs:
 
       - name: Check for hardcoded secrets
         run: |
-          if grep -rnE '(password|token|secret)\s*=\s*["\'][^"\']{10,}' app/ --include='*.py'; then
-            echo 'Potential hardcoded secrets found!'
+          if grep -rnE "(password|token|secret)[[:space:]]*=[[:space:]]*[\"'][^\"']{10,}" app/ --include='*.py'; then
+            echo "Potential hardcoded secrets found!"
             exit 1
           fi
-          echo 'No hardcoded secrets detected'
+          echo "No hardcoded secrets detected"
 
   cd-deploy-production:
     name: CD - Deploy to Production
