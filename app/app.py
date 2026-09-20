@@ -168,6 +168,7 @@ def get_connection():
         password=password,
         port=port,
         sslmode="require",
+        connect_timeout=30,
     )
     return conn
 
@@ -231,15 +232,25 @@ def _connect_via_databricks_sdk():
             return None
 
         st.session_state["conn_info"] = f"Connected to {lakebase_host}/{lakebase_db} (SDK token)"
-        conn = psycopg.connect(
-            host=lakebase_host,
-            dbname=lakebase_db,
-            user=lakebase_user,
-            password=cred.token,
-            port=int(lakebase_port),
-            sslmode="require",
-        )
-        return conn
+        last_err = None
+        for attempt in range(3):
+            try:
+                conn = psycopg.connect(
+                    host=lakebase_host,
+                    dbname=lakebase_db,
+                    user=lakebase_user,
+                    password=cred.token,
+                    port=int(lakebase_port),
+                    sslmode="require",
+                    connect_timeout=30,
+                )
+                return conn
+            except psycopg.OperationalError as e:
+                last_err = e
+                if attempt < 2:
+                    import time as _time
+                    _time.sleep(5 * (attempt + 1))
+        raise last_err
     except Exception as e:
         st.error(f"Databricks SDK connection failed: {str(e)[:200]}")
         return None
@@ -247,8 +258,9 @@ def _connect_via_databricks_sdk():
 
 def execute_query(conn, query, params=None, fetch=True):
     """Execute a SQL query and optionally fetch results."""
-    cur = conn.cursor()
+    cur = None
     try:
+        cur = conn.cursor()
         cur.execute(query, params)
         if fetch:
             columns = [desc[0] for desc in cur.description] if cur.description else []
@@ -259,8 +271,16 @@ def execute_query(conn, query, params=None, fetch=True):
         cur.close()
         return None, None
     except Exception as e:
-        conn.rollback()
-        cur.close()
+        if cur:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if not getattr(conn, 'closed', False):
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         raise Exception(f"Database error: {str(e)}")
 
 
@@ -367,10 +387,26 @@ def main():
     Data is synced from **Unity Catalog** → **Lakebase Postgres** via Reverse ETL.
     """)
 
-    # Connection
-    conn = get_connection()
-    if conn is None:
-        st.stop()
+    # Connection (with retry for endpoint wake-up)
+    conn = None
+    for _attempt in range(2):
+        conn = get_connection()
+        if conn is None:
+            st.stop()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+            break
+        except Exception:
+            get_connection.clear()
+            conn = None
+            if _attempt == 0:
+                import time as _time
+                _time.sleep(3)
+            else:
+                st.error("Could not connect to Lakebase Postgres after retry. The endpoint may be waking up — please refresh the page in a few seconds.")
+                st.stop()
 
     if "conn_info" in st.session_state:
         st.sidebar.success(f"✅ {st.session_state['conn_info']}")
