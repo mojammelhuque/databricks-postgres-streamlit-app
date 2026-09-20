@@ -80,7 +80,7 @@ DEFAULT_CONFIG = {
 }
 
 TABLE_NAME = "synced_well_production"
-SCHEMA_NAME = "public"
+SCHEMA_NAME = "oil_gas_ops"
 
 # ---------------------------------------------------------------------------
 # Database Connection
