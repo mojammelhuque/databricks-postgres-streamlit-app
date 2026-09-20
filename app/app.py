@@ -248,15 +248,20 @@ def _connect_via_databricks_sdk():
 def execute_query(conn, query, params=None, fetch=True):
     """Execute a SQL query and optionally fetch results."""
     cur = conn.cursor()
-    cur.execute(query, params)
-    if fetch:
-        columns = [desc[0] for desc in cur.description] if cur.description else []
-        rows = cur.fetchall()
+    try:
+        cur.execute(query, params)
+        if fetch:
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            rows = cur.fetchall()
+            cur.close()
+            return columns, rows
+        conn.commit()
         cur.close()
-        return columns, rows
-    conn.commit()
-    cur.close()
-    return None, None
+        return None, None
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        raise Exception(f"Database error: {str(e)}")
 
 
 def fetch_dataframe(conn, query, params=None):
