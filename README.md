@@ -42,7 +42,10 @@ This project demonstrates a complete end-to-end workflow for building data-drive
 │     ├─ Write: Update well status, add new wells, edit production rates  │
 │     └─ Analytics: Charts, maps, summary statistics                     │
 │         ↓ Deploy as                                                     │
-│  4. Databricks App (hosted) OR Local/RStudio (standalone)               │
+│  4. Deploy to:                                                          │
+│     • Databricks App (auto-credentials)                                 │
+│     • Streamlit Community Cloud (✅ deployed, SDK token refresh)        │
+│     • Local/RStudio (manual env vars)                                   │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -296,6 +299,48 @@ source venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py --server.port 8501
 ```
+
+### Option D: Streamlit Community Cloud (FREE)
+
+**✅ Successfully Deployed**: September 20, 2026
+
+[Streamlit Community Cloud](https://share.streamlit.io/) hosts your app for free with auto-deploy from GitHub. The app uses Databricks SDK to auto-generate fresh Lakebase tokens every 45 minutes.
+
+**Quick Start:**
+
+1. Go to [share.streamlit.io](https://share.streamlit.io/)
+2. Connect your GitHub repo: `mojammelhuque/databricks-postgres-streamlit-app`
+3. Set main file: `app/app.py`
+4. Configure secrets (Settings → Secrets):
+
+```toml
+DATABRICKS_HOST = "https://dbc-050f2fd4-a450.cloud.databricks.com"
+DATABRICKS_TOKEN = "dapiYOUR_TOKEN_HERE"
+LAKEBASE_PG_HOST = "ep-patient-term-d801116u.database.us-east-2.cloud.databricks.com"
+LAKEBASE_PG_USER = "your.email@example.com"
+LAKEBASE_PG_DB = "databricks_postgres"
+LAKEBASE_PG_PORT = "5432"
+LAKEBASE_PROJECT = "databricks-postgres-streamlit"
+LAKEBASE_BRANCH = "production"
+```
+
+5. Click "Deploy!" — app will be live at `https://your-app-name.streamlit.app`
+
+**See full guide**: [docs/streamlit_cloud_deployment.md](docs/streamlit_cloud_deployment.md)
+
+**Key Features:**
+* ✅ Auto-deploy from GitHub (push to `main` → instant redeploy)
+* ✅ Token auto-refresh every 45 minutes (no manual rotation)
+* ✅ Free tier (no cost for public apps)
+* ✅ Custom URL (`*.streamlit.app`)
+* ⚠️ PAT expires every 90 days (manual renewal required)
+
+**Issues Solved During Deployment:**
+* Endpoint path format (missing branch segment)
+* Schema mismatch (`public` vs `oil_gas_ops`)
+* Transaction error handling (rollback on failures)
+
+See [docs/streamlit_cloud_deployment.md](docs/streamlit_cloud_deployment.md) → "Deployment Success Log" for detailed troubleshooting.
 
 ---
 
