@@ -1,0 +1,166 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  ci-lint-and-test:
+    name: CI - Lint and Test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest streamlit psycopg2-binary pandas plotly pyyaml
+          if [ -f app/requirements.txt ]; then pip install -r app/requirements.txt; fi
+
+      - name: Lint with flake8
+        run: |
+          flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 app/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Validate Streamlit app imports
+        run: |
+          python -c "
+          import ast, sys
+          with open('app/app.py', 'r') as f:
+              tree = ast.parse(f.read())
+          print('app/app.py is valid Python')
+          imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+          import_names = []
+          for imp in imports:
+              if isinstance(imp, ast.Import):
+                  import_names.extend([alias.name for alias in imp.names])
+              elif isinstance(imp, ast.ImportFrom):
+                  import_names.append(imp.module or '')
+          required = ['streamlit', 'pandas', 'plotly']
+          for mod in required:
+              found = any(mod in name for name in import_names)
+              if not found:
+                  print(f'Missing required import: {mod}', file=sys.stderr)
+                  sys.exit(1)
+          print('All required imports found')
+          "
+
+      - name: Validate app.yaml structure
+        run: |
+          python -c "
+          import yaml
+          with open('app/app.yaml', 'r') as f:
+              config = yaml.safe_load(f)
+          assert 'entrypoint' in config, 'Missing entrypoint in app.yaml'
+          assert 'python_version' in config, 'Missing python_version in app.yaml'
+          print('app.yaml is valid')
+          print(f'Entrypoint: {config["entrypoint"]}')
+          print(f'Python: {config["python_version"]}')
+          "
+
+      - name: Check for hardcoded secrets
+        run: |
+          if grep -rnE '(password|token|secret)\s*=\s*["\'][^"\']{10,}' app/ --include='*.py'; then
+            echo 'Potential hardcoded secrets found!'
+            exit 1
+          fi
+          echo 'No hardcoded secrets detected'
+
+  cd-deploy-production:
+    name: CD - Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    environment:
+      name: production
+      url: https://dbc-050f2fd4-a450.cloud.databricks.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Configure Databricks CLI
+        run: |
+          if [ -z "${{ secrets.DATABRICKS_HOST }}" ] || [ -z "${{ secrets.DATABRICKS_TOKEN }}" ]; then
+            echo "DATABRICKS_HOST or DATABRICKS_TOKEN secrets not set."
+            echo "To enable CD deployment, add these repository secrets:"
+            echo "  DATABRICKS_HOST     - Your Databricks workspace URL"
+            echo "  DATABRICKS_TOKEN    - Your Databricks personal access token"
+            echo "  DATABRICKS_APP_NAME - Your Databricks App name"
+            echo "Skipping deployment for now. CI checks passed successfully."
+            exit 0
+          fi
+          export DATABRICKS_HOST=${{ secrets.DATABRICKS_HOST }}
+          export DATABRICKS_TOKEN=${{ secrets.DATABRICKS_TOKEN }}
+
+      - name: Deploy Databricks App
+        run: |
+          export DATABRICKS_HOST=${{ secrets.DATABRICKS_HOST }}
+          export DATABRICKS_TOKEN=${{ secrets.DATABRICKS_TOKEN }}
+          APP_NAME=${{ secrets.DATABRICKS_APP_NAME }}
+          echo "Deploying app: $APP_NAME"
+          echo "Workspace: $DATABRICKS_HOST"
+          if databricks apps get "$APP_NAME" 2>/dev/null; then
+            echo "App exists, deploying update..."
+            databricks apps deploy "$APP_NAME" --source-path ./app
+          else
+            echo "App does not exist. Creating new app..."
+            databricks apps create "$APP_NAME" --source-path ./app
+          fi
+          echo "Deployment complete!"
+          echo "App URL: $DATABRICKS_HOST/apps/$APP_NAME"
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "## Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- PR: #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Merged: ${{ github.event.pull_request.title }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch: dev to main" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Deployed at: $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+  notify-on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [cd-deploy-production]
+    if: failure()
+    steps:
+      - name: Create failure notification
+        run: |
+          echo "Deployment to production failed!"
+          echo "PR: #${{ github.event.pull_request.number }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Please check the workflow logs for details."
