@@ -16,6 +16,7 @@
 8. [Component Interaction Details](#component-interaction-details)
 9. [Deployment Options](#deployment-options)
 10. [Key Design Decisions](#key-design-decisions)
+11. [Concurrency Control — Preventing Lost Updates](#concurrency-control--preventing-lost-updates)
 
 ---
 
@@ -539,6 +540,282 @@ PostgreSQL aborts the entire transaction when any statement fails. Without `conn
 current transaction is aborted, commands ignored until end of transaction block
 ```
 The `execute_query()` function wraps all operations in `try-except` with automatic rollback to prevent this.
+
+---
+
+## Concurrency Control — Preventing Lost Updates
+
+### The Problem: Lost Updates
+
+When multiple users read and write to the **same row** simultaneously, PostgreSQL's MVCC (Multi-Version Concurrency Control) can silently drop one user's update:
+
+```
+Time 0: User A reads  → well_id=1, updated_at=14:30, oil_rate=850
+Time 1: User B reads  → well_id=1, updated_at=14:30, oil_rate=850
+Time 2: User A saves  → oil_rate=900  ✅ committed (updated_at → 14:35)
+Time 3: User B saves  → oil_rate=800  ✅ committed (updated_at → 14:40)
+                       ↑ User A's update is LOST — User B never saw it
+```
+
+PostgreSQL's default isolation level (READ COMMITTED) does not prevent this. Both transactions read the same old value, and the last writer wins silently.
+
+### How PostgreSQL Handles Concurrency (MVCC)
+
+PostgreSQL uses **Multi-Version Concurrency Control** as its foundation:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  PostgreSQL MVCC Model                       │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Readers NEVER block writers                                │
+│  Writers NEVER block readers                                │
+│  Writers only block OTHER writers on the SAME row           │
+│                                                             │
+│  Each transaction sees a consistent snapshot:                │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
+│  │  Transaction A │    │  Transaction B │    │  Transaction C │   │
+│  │  (reads row)  │    │  (reads row)  │    │  (writes row) │   │
+│  │  sees version │    │  sees version │    │  creates new  │   │
+│  │  @ 14:30     │    │  @ 14:30     │    │  version @    │   │
+│  │              │    │              │    │  14:35        │   │
+│  └──────────────┘    └──────────────┘    └──────────────┘   │
+│                                                             │
+│  Problem: MVCC prevents dirty reads but NOT lost updates.   │
+│  Solution: Application-level locking (optimistic or          │
+│  pessimistic) is needed to detect/handle conflicts.          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Two Approaches to Prevent Lost Updates
+
+This project implements **optimistic locking** (Approach 1), but both approaches are documented below for future reference and scaling decisions.
+
+---
+
+### Approach 1: Optimistic Locking (Implemented)
+
+**How it works:** Uses the existing `updated_at` timestamp as a version check. When updating a row, the `WHERE` clause includes the original `updated_at` value the user saw when they loaded the page. If another user modified the row since then, `updated_at` will have changed, and the `UPDATE` will affect 0 rows.
+
+**No schema changes needed** — the `updated_at` column already exists on `synced_well_production`.
+
+#### SQL: Update with Optimistic Locking
+
+```sql
+-- Step 1: User reads the well (app captures updated_at)
+SELECT well_id, well_status, updated_at
+FROM oil_gas_ops.synced_well_production
+WHERE well_id = 1;
+-- Result: well_id=1, well_status='ACTIVE', updated_at='2026-09-20 14:30:00'
+
+-- Step 2: User submits update (app includes updated_at in WHERE)
+UPDATE oil_gas_ops.synced_well_production
+SET well_status = 'SHUT_IN', updated_at = NOW()
+WHERE well_id = 1 AND updated_at = '2026-09-20 14:30:00'
+RETURNING well_id, updated_at;
+-- If 1 row returned: success (updated_at → 2026-09-20 14:35:00)
+-- If 0 rows returned: stale data — another user modified this row first
+```
+
+#### Code: Implementation in app.py
+
+```python
+def update_well_status(conn, well_id, new_status, previous_updated_at):
+    """Update with optimistic locking — pass the updated_at the user originally read."""
+    columns, rows = execute_query(conn, """
+        UPDATE oil_gas_ops.synced_well_production
+        SET well_status = %s, updated_at = %s
+        WHERE well_id = %s AND updated_at = %s
+        RETURNING well_id, updated_at
+    """, (new_status, datetime.now(), well_id, previous_updated_at))
+
+    if not rows:
+        raise Exception(
+            "⚠️ Stale data: this well was modified by another user since you last viewed it. "
+            "Please refresh the page and try again."
+        )
+```
+
+#### Streamlit UI: Capturing updated_at
+
+```python
+# When user selects a well to edit, capture its updated_at
+well = get_well_by_id(conn, selected_well_id)
+well_updated_at = well['updated_at']  # Store for optimistic locking check
+
+# When user submits the form, pass the captured updated_at
+update_well_status(conn, selected_well_id, new_status, well_updated_at)
+# If stale → user sees: "⚠️ Stale data: this well was modified by another user..."
+```
+
+#### Flow Diagram
+
+```
+User A                          User B                    PostgreSQL
+  │                               │                         │
+  │── SELECT well_id=1 ──────────┼─────────────────────────▶│
+  │◀─ updated_at=14:30 ──────────┼─────────────────────────│
+  │                               │                         │
+  │                               │── SELECT well_id=1 ────▶│
+  │                               │◀─ updated_at=14:30 ─────│
+  │                               │                         │
+  │── UPDATE ... WHERE            │                         │
+  │   updated_at=14:30 ──────────┼────────────────────────▶│
+  │◀─ 1 row affected ✅ ──────────┼─────────────────────────│
+  │   (updated_at → 14:35)        │                         │
+  │                               │                         │
+  │                               │── UPDATE ... WHERE      │
+  │                               │   updated_at=14:30 ────▶│
+  │                               │◀─ 0 rows affected ❌ ───│
+  │                               │   (updated_at is now    │
+  │                               │    14:35, not 14:30)    │
+  │                               │                         │
+  │                               │── Show "stale data"     │
+  │                               │   error to user B       │
+  │                               │── User B refreshes       │
+  │                               │   and retries ✅         │
+```
+
+---
+
+### Approach 2: Pessimistic Locking (Alternative — Not Implemented)
+
+**How it works:** Locks the row at the database level using `SELECT ... FOR UPDATE`. Other users trying to modify the same row are blocked until the lock is released (transaction commits or rolls back). A `lock_timeout` prevents indefinite waits.
+
+#### SQL: Pessimistic Locking
+
+```sql
+-- Set a timeout so users don't wait forever
+SET lock_timeout = '5s';
+
+-- Lock the row (other writers BLOCK here until this transaction completes)
+SELECT well_id FROM oil_gas_ops.synced_well_production
+WHERE well_id = 1
+FOR UPDATE;
+
+-- Now safe to update — no one else can modify this row
+UPDATE oil_gas_ops.synced_well_production
+SET well_status = 'SHUT_IN', updated_at = NOW()
+WHERE well_id = 1;
+
+COMMIT;  -- Releases the lock; other waiting users can proceed
+```
+
+#### Code: Pessimistic Locking (Alternative Implementation)
+
+```python
+def update_well_status_pessimistic(conn, well_id, new_status):
+    """Update with row-level lock — other users wait until this transaction completes."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SET lock_timeout = '5s'")
+        # Lock the row (other writers block here)
+        cur.execute("""
+            SELECT well_id FROM oil_gas_ops.synced_well_production
+            WHERE well_id = %s FOR UPDATE
+        """, (well_id,))
+        if not cur.fetchone():
+            cur.close()
+            raise Exception("Well not found")
+
+        cur.execute("""
+            UPDATE oil_gas_ops.synced_well_production
+            SET well_status = %s, updated_at = %s
+            WHERE well_id = %s
+        """, (new_status, datetime.now(), well_id))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        raise Exception(f"Database error: {str(e)}")
+```
+
+#### Flow Diagram
+
+```
+User A                          User B                    PostgreSQL
+  │                               │                         │
+  │── SELECT ... FOR UPDATE ──────┼────────────────────────▶│
+  │◀─ Row locked ✅ ──────────────┼─────────────────────────│
+  │                               │                         │
+  │── UPDATE well_id=1 ───────────┼────────────────────────▶│
+  │◀─ 1 row affected ✅ ──────────┼─────────────────────────│
+  │                               │                         │
+  │── COMMIT ─────────────────────┼────────────────────────▶│
+  │   (lock released)             │                         │
+  │                               │                         │
+  │                               │── SELECT ... FOR UPDATE ▶│
+  │                               │   (was blocked, now      │
+  │                               │    proceeds)             │
+  │                               │◀─ Row locked ✅ ─────────│
+  │                               │                         │
+  │                               │── UPDATE well_id=1 ─────▶│
+  │                               │◀─ 1 row affected ✅ ─────│
+  │                               │── COMMIT ───────────────▶│
+```
+
+---
+
+### Which One to Choose?
+
+| Factor | Optimistic Locking (Approach 1) | Pessimistic Locking (Approach 2) |
+|--------|-------------------------------|----------------------------------|
+| **How it works** | Check `updated_at` in WHERE clause; fail if stale | Lock row with `SELECT FOR UPDATE`; block others |
+| **When conflicts are rare** | ✅ Best — no overhead, fast | ⚠️ Overkill — unnecessary locks |
+| **When conflicts are frequent** | ⚠️ Many retries, user frustration | ✅ Best — orderly queuing |
+| **User experience on conflict** | Clear error: "stale data, please refresh" | Wait (blocked) for up to 5 seconds |
+| **Performance** | No locks held; readers/writers never blocked | Row locks held during transaction |
+| **Deadlock risk** | None | Possible (mitigated with `lock_timeout`) |
+| **Schema changes needed** | None (uses existing `updated_at`) | None |
+| **Code complexity** | Low — add `updated_at` to WHERE + check row count | Medium — `SELECT FOR UPDATE`, `lock_timeout`, cursor management |
+| **Best for** | Read-heavy, occasional writes, many users | Write-heavy on same rows, fewer users |
+| **Network efficiency** | Single round-trip (UPDATE + RETURNING) | Two round-trips (SELECT FOR UPDATE + UPDATE) |
+| **Scalability** | Scales well — no held locks | Limited by lock contention |
+| **Streamlit compatibility** | ✅ Perfect — forms submit once, no long-held connections | ⚠️ Risky — Streamlit connections may time out during lock waits |
+
+### Recommendation: Why Optimistic Locking (Approach 1) Was Chosen
+
+**Optimistic locking is the right choice for this project for the following reasons:**
+
+1. **No schema changes required.** The `updated_at` column already exists on the `synced_well_production` table. Optimistic locking reuses it as a version check with zero database changes.
+
+2. **Low conflict rate in Oil & Gas domain.** Well production data is read frequently (dashboards, analytics, lists) but edited occasionally (status changes, rate updates). Two users editing the exact same well at the exact same time is rare — optimistic locking handles this gracefully without penalizing the common case.
+
+3. **Better user experience.** When a conflict does occur, the user gets a clear, actionable message ("stale data, please refresh") instead of their browser hanging for 5 seconds waiting for a lock. Streamlit's form-based UI is request-response — users expect immediate feedback, not blocking waits.
+
+4. **No deadlock risk.** Optimistic locking never holds database locks. Pessimistic locking (`SELECT FOR UPDATE`) can cause deadlocks if two transactions lock different rows in different orders. While `lock_timeout` mitigates this, it adds complexity.
+
+5. **Streamlit connection model.** Streamlit caches connections with `@st.cache_resource(ttl=2700)`. Held locks from pessimistic locking could span multiple user sessions if the connection is reused, causing unexpected blocking. Optimistic locking avoids this entirely — each UPDATE is atomic and releases immediately.
+
+6. **Network efficiency.** Optimistic locking does a single `UPDATE ... RETURNING` round-trip. Pessimistic locking requires two: `SELECT FOR UPDATE` then `UPDATE`. On Streamlit Cloud (which connects through Databricks SDK → Lakebase Postgres), minimizing round-trips is important for responsiveness.
+
+7. **Scales to more users.** Optimistic locking has no contention — 100 users can read the same well simultaneously without any blocking. Only the rare write-conflict case triggers a retry. Pessimistic locking would serialize all writes to the same row, creating a bottleneck as user count grows.
+
+8. **Future-proof.** If conflict rates increase (many users editing the same well), switching to pessimistic locking is straightforward — the API signature changes minimally (drop `previous_updated_at`, add `SELECT FOR UPDATE`). Both approaches are documented here for that transition.
+
+### When to Switch to Pessimistic Locking (Future Trigger)
+
+Consider switching to Approach 2 (pessimistic locking) if:
+
+- Users frequently see "stale data" errors (conflict rate > 10% of write attempts)
+- Multiple operators edit the same well's production rates simultaneously (e.g., real-time SCADA integration)
+- The app adds features like collaborative editing or live-updating dashboards with write-back
+- You need strict ordering of writes (e.g., audit trails requiring sequential updates)
+
+To switch, replace the optimistic locking functions with the pessimistic locking versions (documented above) and remove the `previous_updated_at` parameter from the UI calls.
+
+### Concurrency Protection Summary
+
+| Operation | Protection | Mechanism |
+|-----------|-----------|-----------|
+| INSERT (add well) | Primary key constraint | `well_id` is PK — PostgreSQL rejects duplicates |
+| UPDATE status | ✅ Optimistic locking | `WHERE well_id = %s AND updated_at = %s` + `RETURNING` check |
+| UPDATE rates | ✅ Optimistic locking | `WHERE well_id = %s AND updated_at = %s` + `RETURNING` check |
+| DELETE well | Row-level lock (implicit) | `DELETE` auto-locks the row during transaction |
+| SELECT (all reads) | MVCC snapshot | Readers never blocked; see last committed version |
+| Transaction safety | Commit/Rollback | `try-except` with `conn.rollback()` on all operations |
 
 ---
 

@@ -344,23 +344,66 @@ def insert_well(conn, data):
     ), fetch=False)
 
 
-def update_well_status(conn, well_id, new_status):
-    """Update a well's status."""
-    execute_query(conn, f"""
+def update_well_status(conn, well_id, new_status, previous_updated_at):
+    """Update a well's status with optimistic locking.
+
+    Uses the updated_at timestamp as a version check. If the row was modified
+    by another user since the caller last read it, the UPDATE affects 0 rows
+    and a stale-data exception is raised.
+
+    Args:
+        conn: Database connection
+        well_id: Well ID to update
+        new_status: New status value (ACTIVE, SHUT_IN, MAINTENANCE, COMPLETED)
+        previous_updated_at: The updated_at value the caller originally read
+
+    Raises:
+        Exception: If the row was modified by another user (stale data)
+    """
+    columns, rows = execute_query(conn, f"""
         UPDATE {SCHEMA_NAME}.{TABLE_NAME}
         SET well_status = %s, updated_at = %s
-        WHERE well_id = %s
-    """, (new_status, datetime.now(), well_id), fetch=False)
+        WHERE well_id = %s AND updated_at = %s
+        RETURNING well_id, updated_at
+    """, (new_status, datetime.now(), well_id, previous_updated_at))
+
+    if not rows:
+        raise Exception(
+            "⚠️ Stale data: this well was modified by another user since you last viewed it. "
+            "Please refresh the page and try again."
+        )
 
 
-def update_well_rates(conn, well_id, oil_rate, gas_rate, water_rate, gas_lift_rate, water_cut):
-    """Update a well's production rates."""
-    execute_query(conn, f"""
+def update_well_rates(conn, well_id, oil_rate, gas_rate, water_rate, gas_lift_rate, water_cut, previous_updated_at):
+    """Update a well's production rates with optimistic locking.
+
+    Uses the updated_at timestamp as a version check. If the row was modified
+    by another user since the caller last read it, the UPDATE affects 0 rows
+    and a stale-data exception is raised.
+
+    Args:
+        conn: Database connection
+        well_id: Well ID to update
+        oil_rate, gas_rate, water_rate, gas_lift_rate, water_cut: New production values
+        previous_updated_at: The updated_at value the caller originally read
+
+    Raises:
+        Exception: If the row was modified by another user (stale data)
+    """
+    columns, rows = execute_query(conn, f"""
         UPDATE {SCHEMA_NAME}.{TABLE_NAME}
         SET oil_rate = %s, gas_rate = %s, water_rate = %s,
             gas_lift_rate = %s, water_cut = %s, updated_at = %s
-        WHERE well_id = %s
-    """, (oil_rate, gas_rate, water_rate, gas_lift_rate, water_cut, datetime.now(), well_id), fetch=False)
+        WHERE well_id = %s AND updated_at = %s
+        RETURNING well_id, updated_at
+    """, (oil_rate, gas_rate, water_rate, gas_lift_rate, water_cut,
+          datetime.now(), well_id, previous_updated_at))
+
+    if not rows:
+        raise Exception(
+            "⚠️ Stale data: this well was modified by another user since you last viewed it. "
+            "Please refresh the page and try again."
+        )
 
 
 def delete_well(conn, well_id):
@@ -581,6 +624,9 @@ def main():
 
         tab1, tab2 = st.tabs(["📋 Status", "📈 Production Rates"])
 
+        # Store the updated_at when the well was loaded (for optimistic locking)
+        well_updated_at = well['updated_at']
+
         with tab1:
             with st.form("edit_status_form"):
                 current_status = well['well_status']
@@ -589,8 +635,9 @@ def main():
                 submitted = st.form_submit_button("Update Status")
                 if submitted:
                     try:
-                        update_well_status(conn, selected_well_id, new_status)
+                        update_well_status(conn, selected_well_id, new_status, well_updated_at)
                         st.success(f"✅ Status updated to '{new_status}'")
+                        st.info("💡 Refresh the page to see the latest data from other users.")
                     except Exception as e:
                         st.error(f"❌ Error: {e}")
 
@@ -609,8 +656,9 @@ def main():
                 submitted = st.form_submit_button("Update Rates")
                 if submitted:
                     try:
-                        update_well_rates(conn, selected_well_id, oil, gas, water, gas_lift, wcut)
+                        update_well_rates(conn, selected_well_id, oil, gas, water, gas_lift, wcut, well_updated_at)
                         st.success("✅ Production rates updated!")
+                        st.info("💡 Refresh the page to see the latest data from other users.")
                     except Exception as e:
                         st.error(f"❌ Error: {e}")
 
