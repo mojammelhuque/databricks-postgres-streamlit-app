@@ -60,11 +60,10 @@ except ImportError:
     DATABRICKS_SDK_AVAILABLE = False
 
 # Streamlit Cloud secrets support
+# Use st.secrets.get() which returns None for missing keys instead of raising
 try:
-    st.secrets["_test"]
+    _ = st.secrets.get("_test_nonexistent_key")
     STREAMLIT_SECRETS_AVAILABLE = True
-except st.errors.StreamlitAPIException:
-    STREAMLIT_SECRETS_AVAILABLE = False
 except Exception:
     STREAMLIT_SECRETS_AVAILABLE = False
 
@@ -157,14 +156,15 @@ def get_connection():
 
 def _get_streamlit_cloud_config():
     """Check if Streamlit Cloud secrets or DATABRICKS_HOST env var are available."""
-    if STREAMLIT_SECRETS_AVAILABLE:
-        try:
-            host = st.secrets.get("DATABRICKS_HOST")
-            token = st.secrets.get("DATABRICKS_TOKEN")
-            if host and token:
-                return True
-        except Exception:
-            pass
+    # Always try st.secrets first (works on Streamlit Cloud)
+    try:
+        host = st.secrets.get("DATABRICKS_HOST")
+        token = st.secrets.get("DATABRICKS_TOKEN")
+        if host and token:
+            return True
+    except Exception:
+        pass
+    # Fallback: check environment variables
     if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
         return True
     return False
@@ -180,13 +180,13 @@ def _connect_via_databricks_sdk():
         return None
 
     def _get_secret(key, fallback_env=None):
-        if STREAMLIT_SECRETS_AVAILABLE:
-            try:
-                val = st.secrets.get(key)
-                if val:
-                    return val
-            except Exception:
-                pass
+        # Always try st.secrets first (works on Streamlit Cloud)
+        try:
+            val = st.secrets.get(key)
+            if val:
+                return val
+        except Exception:
+            pass
         return os.environ.get(fallback_env or key, "")
 
     databricks_host = _get_secret("DATABRICKS_HOST")
