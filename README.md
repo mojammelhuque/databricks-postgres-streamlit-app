@@ -1,6 +1,8 @@
 # 🛢️ Databricks Postgres Streamlit Apps
 
 > **End-to-end workflow for testing Lakebase Postgres read/write with Streamlit apps** — synced from Unity Catalog to Lakebase Postgres using Reverse ETL.
+>
+> 📖 **New to the project?** Read the [Project Description](docs/PROJECT_DESCRIPTION.md) for a complete walkthrough of the backend architecture, data flow diagrams, secret management, and user interaction model.
 
 ---
 
@@ -378,6 +380,7 @@ Key highlights:
 | [api_reference.md](docs/api_reference.md) | Function reference for app.py |
 | [security.md](docs/security.md) | Security architecture, credentials, and compliance |
 | [branching_strategy.md](docs/branching_strategy.md) | Git branching, CI/CD pipeline, and developer workflow |
+| [PROJECT_DESCRIPTION.md](docs/PROJECT_DESCRIPTION.md) | **Complete backend architecture, data flow diagram, secret management, and user interaction guide** |
 | [troubleshooting.md](docs/troubleshooting.md) | Common issues, error messages, and solutions |
 
 ---
@@ -442,6 +445,7 @@ databricks-postgres-streamlit-apps/
     ├── api_reference.md              # Function reference for app.py
     ├── security.md                    # Security architecture and best practices
     ├── branching_strategy.md          # Git branching and CI/CD workflow
+    ├── PROJECT_DESCRIPTION.md       # Complete backend architecture & data flow guide
     └── troubleshooting.md            # Common issues and solutions
 ```
 
