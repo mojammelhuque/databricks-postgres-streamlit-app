@@ -90,6 +90,24 @@ SCHEMA_NAME = "public"
 def get_connection():
     """Create a connection to Lakebase Postgres."""
     
+    # Debug: show connection diagnostics in Streamlit sidebar
+    _debug = os.environ.get("STREAMLIT_DEBUG", "")
+    if _debug:
+        with st.sidebar:
+            st.markdown("### 🔍 Connection Diagnostics")
+            st.write(f"**DATABRICKS_LAKEBASE_PG_HOST**: {'set' if os.environ.get('DATABRICKS_LAKEBASE_PG_HOST') else 'not set'}")
+            st.write(f"**DATABRICKS_HOST (env)**: {'set' if os.environ.get('DATABRICKS_HOST') else 'not set'}")
+            st.write(f"**LAKEBASE_PG_HOST (env)**: {'set' if os.environ.get('LAKEBASE_PG_HOST') else 'not set'}")
+            try:
+                _sh = st.secrets.get("DATABRICKS_HOST")
+                _st = st.secrets.get("DATABRICKS_TOKEN")
+                st.write(f"**DATABRICKS_HOST (secret)**: {'set' if _sh else 'not set'}")
+                st.write(f"**DATABRICKS_TOKEN (secret)**: {'set' if _st else 'not set'}")
+            except Exception as e:
+                st.write(f"**st.secrets error**: {e}")
+            st.write(f"**SDK available**: {DATABRICKS_SDK_AVAILABLE}")
+            st.write(f"**_get_streamlit_cloud_config()**: {_get_streamlit_cloud_config()}")
+    
     # --- Path 1: Databricks App (auto-injected credentials) ---
     if os.environ.get("DATABRICKS_LAKEBASE_PG_HOST"):
         host = os.environ["DATABRICKS_LAKEBASE_PG_HOST"]
