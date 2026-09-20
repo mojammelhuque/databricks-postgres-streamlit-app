@@ -1,6 +1,8 @@
 # 📖 Project Description — Databricks Postgres Streamlit Apps
 
 > **Comprehensive guide to the backend architecture, data flow, user interaction model, and secret management for the Oil & Gas Well Production Dashboard.**
+>
+> **🌐 Live App:** https://databricks-pg-uc-app.streamlit.app/
 
 ---
 
@@ -142,7 +144,7 @@ The app provides these sections (all in a single `app.py` file):
 │                                                             │
 │  User navigates to:                                         │
 │  • Databricks App URL (private, identity-aware)             │
-│  • Streamlit Cloud URL (public, e.g., app.streamlit.app)    │
+│  • Streamlit Cloud URL: https://databricks-pg-uc-app.streamlit.app    │
 │  • localhost:8501 (local dev)                               │
 │                                                             │
 │  User sees:                                                 │
@@ -172,7 +174,7 @@ The app provides these sections (all in a single `app.py` file):
 | Deployment | Auth Method | Who Can Access |
 |------------|------------|----------------|
 | Databricks App | Databricks identity (SSO/OAuth) | Workspace members with app access |
-| Streamlit Cloud | Public URL (no auth) | Anyone with the URL |
+| Streamlit Cloud | `https://databricks-pg-uc-app.streamlit.app` (public, no auth) | Anyone with the URL |
 | Local dev | None (localhost) | Only the developer |
 
 **Note**: The Streamlit Cloud deployment is intentionally public for demo/portfolio purposes. For production with sensitive data, use Databricks Apps with identity-aware access.
@@ -836,7 +838,7 @@ To switch, replace the optimistic locking functions with the pessimistic locking
 | Postgres Host | `ep-patient-term-d801116u.database.us-east-2.cloud.databricks.com` | Endpoint URL |
 | GitHub Repo | `mojammelhuque/databricks-postgres-streamlit-app` | Git Repository |
 | Databricks App | `oil-gas-streamlit-app` | Databricks App |
-| Streamlit Cloud | `https://<app-name>.streamlit.app` | Streamlit Cloud App |
+| Streamlit Cloud | `https://databricks-pg-uc-app.streamlit.app` | Streamlit Cloud App |
 
 ---
 

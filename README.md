@@ -6,6 +6,14 @@
 
 ---
 
+## 🌐 Live App
+
+**App URL:** https://databricks-pg-uc-app.streamlit.app/
+
+The app is deployed on Streamlit Community Cloud and connects to Databricks Lakebase Postgres via the Databricks SDK for token rotation.
+
+---
+
 ## 📋 Table of Contents
 
 1. [Overview](#overview)
@@ -46,7 +54,7 @@ This project demonstrates a complete end-to-end workflow for building data-drive
 │         ↓ Deploy as                                                     │
 │  4. Deploy to:                                                          │
 │     • Databricks App (auto-credentials)                                 │
-│     • Streamlit Community Cloud (✅ deployed, SDK token refresh)        │
+│     • [Streamlit Community Cloud](https://databricks-pg-uc-app.streamlit.app/) (✅ deployed, SDK token refresh)        │
 │     • Local/RStudio (manual env vars)                                   │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
