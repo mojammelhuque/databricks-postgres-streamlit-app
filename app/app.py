@@ -52,6 +52,22 @@ except ImportError:
         st.error("psycopg is not installed. Run: pip install 'psycopg[binary]' or psycopg2-binary")
         sys.exit(1)
 
+# Try importing Databricks SDK (needed for Streamlit Cloud / token refresh)
+try:
+    from databricks.sdk import WorkspaceClient
+    DATABRICKS_SDK_AVAILABLE = True
+except ImportError:
+    DATABRICKS_SDK_AVAILABLE = False
+
+# Streamlit Cloud secrets support
+try:
+    st.secrets["_test"]
+    STREAMLIT_SECRETS_AVAILABLE = True
+except st.errors.StreamlitAPIException:
+    STREAMLIT_SECRETS_AVAILABLE = False
+except Exception:
+    STREAMLIT_SECRETS_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -74,15 +90,21 @@ SCHEMA_NAME = "public"
 @st.cache_resource(ttl=2700)  # Cache for 45 minutes (token expires in 1 hour)
 def get_connection():
     """Create a connection to Lakebase Postgres."""
-    # If running as Databricks App, use the auto-injected environment variables
+    
+    # --- Path 1: Databricks App (auto-injected credentials) ---
     if os.environ.get("DATABRICKS_LAKEBASE_PG_HOST"):
         host = os.environ["DATABRICKS_LAKEBASE_PG_HOST"]
         db = os.environ.get("DATABRICKS_LAKEBASE_PG_DATABASE", "databricks_postgres")
         user = os.environ.get("DATABRICKS_LAKEBASE_PG_USER", "")
         password = os.environ.get("DATABRICKS_LAKEBASE_PG_PASSWORD", "")
         port = int(os.environ.get("DATABRICKS_LAKEBASE_PG_PORT", "5432"))
+    
+    # --- Path 2: Streamlit Community Cloud (Databricks SDK token refresh) ---
+    elif _get_streamlit_cloud_config():
+        return _connect_via_databricks_sdk()
+    
+    # --- Path 3: Local development (environment variables or URL) ---
     else:
-        # Local development - use environment variables or URL
         url = os.environ.get("LAKEBASE_PG_URL")
         if url:
             st.session_state["conn_info"] = "Using LAKEBASE_PG_URL"
@@ -99,6 +121,12 @@ def get_connection():
         🔧 **Database connection not configured.**
         
         **For Databricks Apps:** The connection is auto-configured via app.yaml.
+        
+        **For Streamlit Community Cloud:** Set these secrets in your Streamlit app:
+        - `DATABRICKS_HOST` - Your Databricks workspace URL
+        - `DATABRICKS_TOKEN` - Your Databricks personal access token
+        - `LAKEBASE_PG_HOST` - Your Lakebase Postgres endpoint host
+        - `LAKEBASE_PG_USER` - Your Databricks email
         
         **For local development:** Set these environment variables:
         ```bash
@@ -125,6 +153,77 @@ def get_connection():
         sslmode="require",
     )
     return conn
+
+
+def _get_streamlit_cloud_config():
+    """Check if Streamlit Cloud secrets or DATABRICKS_HOST env var are available."""
+    if STREAMLIT_SECRETS_AVAILABLE:
+        try:
+            host = st.secrets.get("DATABRICKS_HOST")
+            token = st.secrets.get("DATABRICKS_TOKEN")
+            if host and token:
+                return True
+        except Exception:
+            pass
+    if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
+        return True
+    return False
+
+
+def _connect_via_databricks_sdk():
+    """Connect to Lakebase Postgres using Databricks SDK for auto token refresh.
+    Used by Streamlit Community Cloud where DATABRICKS_HOST and DATABRICKS_TOKEN
+    are available but Lakebase credentials are not auto-injected.
+    """
+    if not DATABRICKS_SDK_AVAILABLE:
+        st.error("databricks-sdk is required for Streamlit Cloud. Add it to requirements.txt.")
+        return None
+
+    def _get_secret(key, fallback_env=None):
+        if STREAMLIT_SECRETS_AVAILABLE:
+            try:
+                val = st.secrets.get(key)
+                if val:
+                    return val
+            except Exception:
+                pass
+        return os.environ.get(fallback_env or key, "")
+
+    databricks_host = _get_secret("DATABRICKS_HOST")
+    databricks_token = _get_secret("DATABRICKS_TOKEN")
+    lakebase_host = _get_secret("LAKEBASE_PG_HOST")
+    lakebase_user = _get_secret("LAKEBASE_PG_USER")
+    lakebase_db = _get_secret("LAKEBASE_PG_DB") or "databricks_postgres"
+    lakebase_port = _get_secret("LAKEBASE_PG_PORT") or "5432"
+    project_name = _get_secret("LAKEBASE_PROJECT") or "databricks-postgres-streamlit"
+    endpoint_name = f"projects/{project_name}/endpoints/primary"
+
+    try:
+        w = WorkspaceClient(host=databricks_host, token=databricks_token)
+        cred = w.postgres.generate_database_credential(endpoint=endpoint_name)
+
+        if not lakebase_host:
+            endpoint = w.postgres.get_endpoint(name=endpoint_name)
+            if hasattr(endpoint, "host") and endpoint.host:
+                lakebase_host = endpoint.host
+
+        if not lakebase_host:
+            st.error("Set LAKEBASE_PG_HOST in Streamlit secrets to your endpoint host.")
+            return None
+
+        st.session_state["conn_info"] = f"Connected to {lakebase_host}/{lakebase_db} (SDK token)"
+        conn = psycopg.connect(
+            host=lakebase_host,
+            dbname=lakebase_db,
+            user=lakebase_user,
+            password=cred.token,
+            port=int(lakebase_port),
+            sslmode="require",
+        )
+        return conn
+    except Exception as e:
+        st.error(f"Databricks SDK connection failed: {str(e)[:200]}")
+        return None
 
 
 def execute_query(conn, query, params=None, fetch=True):
