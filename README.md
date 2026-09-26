@@ -364,6 +364,8 @@ See [docs/data_dictionary.md](docs/data_dictionary.md) for the complete field-by
 
 See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues and solutions.
 
+See [PostgreSQL settings and maintenance](docs/POSTGRES_MAINTENANCE.md) for endpoint settings, the disabled-endpoint recovery procedure, and maintenance history.
+
 ---
 
 ## Security
